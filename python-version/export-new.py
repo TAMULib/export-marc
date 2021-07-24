@@ -164,6 +164,11 @@ while True:
 								record.leader = "{:<24}".format(record.leader)
 					writer.write(record.as_json())
 					writer.write('\n')
+
+					#ADD AN 999t FOR EACH ITEM to show it is not suppressed
+					record['999'].add_subfield('t','0')
+					# DCH 
+                    
 			except Exception as e:
 					print("ERROR PROCESSING ROW:" + str(row))
 					print(e)
