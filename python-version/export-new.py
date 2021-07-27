@@ -46,7 +46,7 @@ for m in materialTypes:
 locLookup = {}
 locCursor = folio_db.cursor(cursor_factory=psycopg2.extras.DictCursor)
 select_all_loc = '''
-select id, jsonb->>'name' as name from {}_mod_inventory_storage.location'''.format(TENANT)
+select id, jsonb->>'discoveryDisplayName' as name from {}_mod_inventory_storage.location'''.format(TENANT)
 locCursor.execute(select_all_loc)
 locations = locCursor.fetchall()
 for l in locations:
@@ -66,13 +66,26 @@ cursor = folio_db.cursor(name='folio',cursor_factory=psycopg2.extras.DictCursor)
 #THIS COULD BE MODIFIED TO RETREIVE X NUMBER OF RECORDS PER FILE
 cursor.itersize=300000
 #from {}_mod_marc_storage.marc_record'''.format(TENANT)
+
+
+#select_ids_sql = '''
+#select
+#id, 
+#instance_id 
+#from {}_mod_source_record_storage.records_lb where state = {} and (suppress_discovery = False  or suppress_discovery is null)'''.format(TENANT,"'ACTUAL'")
+
 select_ids_sql = '''
 select
-id, 
+id,
+suppress_discovery, 
 instance_id 
-from {}_mod_source_record_storage.records_lb where state = {} and (suppress_discovery = False  or suppress_discovery is null)'''.format(TENANT,"'ACTUAL'")
-print("executing query")
+from {}_mod_source_record_storage.records_lb where state = {}'''.format(TENANT,"'ACTUAL'")
+
+#print("executing query")
 cursor.execute(select_ids_sql)
+
+discoverySuppress = "0"
+
 while True:
 	print("in the while true - fetching...")
 	rows = cursor.fetchmany(cursor.itersize)
@@ -110,18 +123,37 @@ while True:
 					if record['4xx'] is not None:
 						logging.error("BAD RECORD: 4xx" + str(row))
 						continue
+#					select_holding_sql = '''
+#					select id, creation_date, callnumbertypeid, 
+#					jsonb->>'permanentLocationId' as permanentlocationid, 
+#					jsonb->'holdingsStatements' as holdingstatements,
+#					jsonb->>'callNumber' as callNumber from 
+#					{}_mod_inventory_storage.holdings_record 
+#					where instanceid = '{}' and (jsonb->>'discoverySuppress'='false' or jsonb->>'discoverySuppress' is null)'''.format(TENANT,rowInstanceId)
+                    
 					select_holding_sql = '''
 					select id, creation_date, callnumbertypeid, 
 					jsonb->>'permanentLocationId' as permanentlocationid, 
 					jsonb->'holdingsStatements' as holdingstatements,
-					jsonb->>'callNumber' as callNumber from 
+					jsonb->>'callNumber' as callNumber, 
+                    jsonb->>'discoverySuppress' as discoverySuppress from 
 					{}_mod_inventory_storage.holdings_record 
-					where instanceid = '{}'  and (jsonb->>'discoverySuppress'='false' or jsonb->>'discoverySuppress' is null)'''.format(TENANT,rowInstanceId)
-					#print(select_holding_sql)
+					where instanceid = '{}' '''.format(TENANT,rowInstanceId)
+                    
+#					print(select_holding_sql)
 					marcRecordCursor.execute(select_holding_sql)
 					holdingRows = marcRecordCursor.fetchall()
 					for holding in holdingRows:
-						#print(holding['callnumber'])
+					
+						#print(holding[6])            
+                    
+						discoverySuppress = "0"
+                        
+						if not (holding[6] is None):
+							tmp_hold = holding[6]
+							if (tmp_hold == "true"):
+								discoverySuppress = "1"
+                        
 						holdingsStatements = holding['holdingstatements']
 						rowHoldingsId = holding['id']
 						newField = Field(tag = '998',
@@ -139,13 +171,20 @@ while True:
 						jsonb->>'barcode' as barcode, 
 						jsonb->'effectiveCallNumberComponents'->>'prefix' as prefix,
 						jsonb->'effectiveCallNumberComponents'->>'typeId' as callnotype,
-						jsonb->'effectiveCallNumberComponents'->>'callNumber' as callnumber
+						jsonb->'effectiveCallNumberComponents'->>'callNumber' as callnumber,
+						jsonb->'effectiveCallNumberComponents'->>'discoverySuppress' as discoverySuppress
 						from {}_mod_inventory_storage.item where 
-						holdingsrecordid = '{}' and  (jsonb->>'discoverySuppress'='false' or jsonb->>'discoverySuppress' is null)'''.format(TENANT,rowHoldingsId)
-						#print(select_item_sql)
+						holdingsrecordid = '{}' '''.format(TENANT,rowHoldingsId)
+#						print(select_item_sql)
 						marcRecordCursor.execute(select_item_sql)
 						itemRows = marcRecordCursor.fetchall()
 						for item in itemRows:
+                        
+							if not (item[7] is None):
+								tmp_hold = item[7]
+								if (tmp_hold == "true"):
+									discoverySuppress = "1"                                
+                        
 							callNoToUse = item.get('callnumber','na')
 							#print(callNoToUse)
 							prefix = item.get('prefix',None)
@@ -162,12 +201,13 @@ while True:
 							if (len(record.leader) < 24):
 								logging.error("BAD LEADER" + record.leader + " " + str(row))
 								record.leader = "{:<24}".format(record.leader)
-					writer.write(record.as_json())
-					writer.write('\n')
 
 					#ADD AN 999t FOR EACH ITEM to show it is not suppressed
-					record['999'].add_subfield('t','0')
+					record['999'].add_subfield('t',str(discoverySuppress))
 					# DCH 
+
+					writer.write(record.as_json())
+					writer.write('\n')
                     
 			except Exception as e:
 					print("ERROR PROCESSING ROW:" + str(row))
@@ -178,6 +218,7 @@ while True:
 					logging.error(e)
 					continue
 		writer.close()
+		break
 	else:
 		print("in the else --> finishing")
 		break
